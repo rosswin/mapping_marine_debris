@@ -1,0 +1,21 @@
+common commands to copy and paste for preprocessing 2015 DAR aerial imagery
+
+
+
+#GDAL WARP- CLIP WITH CUTLINES
+ls *.tif | parallel -q gdalwarp -srcnodata "1 1 1" -dstnodata "0 0 0" -crop_to_cutline -cutline /media/ross/data01/02_data/DAR_Coastal_2015/kahoolawe/cutlines/gdal_trace_outline/{.}.shp $PWD/{} $PWD/gdalwarp/{} 2>&1 | tee -a $PWD/gdalwarp/log.txt
+
+#GDAL TRANSLATE- CLOUD COMPATIBLE GEOTIFFS!!!
+ls *.tif | parallel gdal_translate -of GTiff -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "COMPRESS=JPEG" -stats {} ../01_gdaltranslate/{} 2>&1 | tee -a ../01_gdaltranslate/log.txt
+
+
+#GDAL TRACE OUTLINE- TRACE TIFS IN parallel
+ls *.tif | parallel --tag gdal_trace_outline {} -ndv 0..25 -ndv 195..255 -min-ring-area 1500000 -no-donuts -pinch-excursions -out-cs en -ogr-out ../cutlines/gdal_trace_outline/{.}.shp 2>&1 | tee -a ../cutlines/gdal_trace_outline/log.txt
+
+ls *.tif | parallel gdaladdo -r average {}
+
+# CONVERT GPKGS to SHPS
+ls *.gpkg | parallel -q ogr2ogr -f "ESRI Shapefile" ../gdal_trace_outline_handedit_shp/{.}.shp {}
+
+#too many files for ls. Write to filelist with relative path. Note: if you give find an absolute path, you will get an abs path.
+find /media/ross/ssd/00_2015_DAR_marinedebris/kahoolawe/03_gdal_retile_512x512 -type f -name "*.jpg" > jpg_list.txt
