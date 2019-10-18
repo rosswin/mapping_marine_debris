@@ -14,12 +14,12 @@ import numpy as np
 
 #### EDIT THESE ########################################################
 
-file_list = f"/media/ross/ssd/00_2015_DAR_marinedebris/maui/03_gdalwarp_blocksize/tif_list.txt"
+file_list = f"/media/ross/ssd/00_2015_DAR_marinedebris/maui/03_gdalwarp_blocksize/missed_tiles_2.txt"
 out_dir = f"/media/ross/ssd/00_2015_DAR_marinedebris/maui/04_window_retile"
 
 #### STOP EDITING #####################################################
 
-log_name = os.path.join(out_dir, 'log.txt')
+log_name = os.path.join(out_dir, 'log_3.txt')
 
 #### START OF FCNs ########################################
 
@@ -74,8 +74,7 @@ logging.basicConfig(
     format="%(asctime)s %(message)s",
     handlers=[
         logging.FileHandler(log_name),
-        logging.StreamHandler()],
-    handlers[1].setLevel(logging.ERROR))
+        logging.StreamHandler()])
 
 # open the file list, count the files and display count
 with open(file_list, 'r') as f:
