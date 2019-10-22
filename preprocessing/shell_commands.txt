@@ -19,3 +19,10 @@ ls *.gpkg | parallel -q ogr2ogr -f "ESRI Shapefile" ../gdal_trace_outline_handed
 
 #too many files for ls. Write to filelist with relative path. Note: if you give find an absolute path, you will get an abs path.
 find /media/ross/ssd/00_2015_DAR_marinedebris/kahoolawe/03_gdal_retile_512x512 -type f -name "*.jpg" > jpg_list.txt
+
+
+
+
+
+
+ls molokai*.tif | parallel -q --tag gdalwarp -srcnodata "1 1 1" -dstnodata "0 0 0" -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "COMPRESS=JPEG" -crop_to_cutline -cutline /media/ross/ssd/02_molokai_dar2015/tiles_shp/03_gdal_trace_outline_clean/{.}.shp /{} /media/ross/ssd/02_molokai_dar2015/00_256x256/{} 2>&1 | tee -a /media/ross/ssd/02_molokai_dar2015/00_256x256/log.txt
