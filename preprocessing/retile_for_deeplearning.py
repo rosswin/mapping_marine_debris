@@ -9,6 +9,7 @@ import math
 import multiprocessing
 import logging
 from itertools import product, repeat
+import optparse
 
 import rasterio
 from rasterio import windows
@@ -59,16 +60,63 @@ def generate_polygon(bbox):
     
     #logging.info(f'vertex list: {vertex_list}')
     polygon = geometry.Polygon([[v.x, v.y] for v in vertex_list])
+
+    #print(f"polygon: {polygon}")
     
     return polygon
 
-def make_gdf(polygons, attr_dict):
+def make_gdf(polygons, attr_dict, out_crs):
     gs = gpd.GeoSeries(polygons)
     df = pd.DataFrame(data=attr_dict)
 
-    gdf = gpd.GeoDataFrame(df, geometry=gs)
+    gdf = gpd.GeoDataFrame(df, crs=out_crs, geometry=gs)
     
     return gdf
+
+def grid_calc(width, height, stride):
+    #get all the upper left (ul) pixel values of our chips. Combine those into a list of all the chip's ul pixels. 
+    x_chips = width // stride
+    x_ul = [stride * s for s in range(x_chips)]
+
+    y_chips = height // stride
+    y_ul = [stride * s for s in range(y_chips)]
+
+    #xy_ul = product(x_ul, y_ul) #this is the final list of ul pixel values
+    #print(f"xy_ul: {len(xy_ul)}")
+
+    xy_ul = []
+    for x in x_ul:
+        for y in y_ul:
+            xy_ul.append((x, y))
+
+    #print(f"x/y ul len: {len(x_ul)} / {len(y_ul)}")
+    #print(f"y * x = {len(x_ul) * len(y_ul)}")
+    #print(f"xy_ul len: {len(xy_ul)}")
+
+    return xy_ul
+
+def is_nodata(in_data):
+    #check to make sure our chip isn't made up of all zeros (nodata)
+    zeros = np.zeros_like(in_data)
+    #check if they're equal, return result
+    if np.array_equal(in_data, zeros):
+        return True
+    else:
+        return False
+
+def write_jpeg(in_data, in_count, in_size, in_win_transform, in_src_crs, in_out_path):
+    #building a custom jpeg profile for our chip due to some gdal/rasterio bugs in walking from input geotiff to output jpeg
+    profile={'driver': 'JPEG',
+        'count': in_count,
+        'dtype': rasterio.ubyte,
+        'height': in_size,
+        'width': in_size,
+        'transform': in_win_transform,
+        'crs': in_src_crs}
+        
+    #write the chip
+    with rasterio.open(in_out_path, 'w', **profile) as dst:
+        dst.write(in_data)
 
 def chip(args, in_tif):
     """
@@ -97,129 +145,171 @@ def chip(args, in_tif):
     #calculate our stride
     stride = size - overlap
 
+    #print(f"size: {size}")
+    #print(f"overlap: {overlap}")
+    #print(f"stride: {stride}")
+
+    polygons = [] #this is to store geometries for exporting to a gpkg tindex
+    attr_dict={} #this holds the attributes for exporting to a gpkg tindex
+    basenames = [] #this holds the values of the 'filename' attribute
+
     #open our raster
     with rasterio.open(in_tif, 'r') as src:
         logging.info(f"Opened, {in_tif}")
-        print(f"Opened, {in_tif}")
+        #print(f"Opened, {in_tif}")
+
         basename = os.path.splitext(os.path.basename(in_tif))[0]
-        polygons = [] #this is to store geometries for exporting to a gpkg tindex
-        attr_dict={} #this holds the attributes for exporting to a gpkg tindex
-        basenames = [] #this holds the values of the 'filename' attribute
 
         #get the image's coordinate reference system, width, and height
         src_crs = src.crs
         width = src.width
         height = src.height
+        #print(f"h/w: {height}, {width}")
 
         #check that the size of the image is divisible by our chip size.
         if width%size != 0 or height%size != 0:
             logging.error(f"{in_tif} of height {height} and width {width}. Is not divisible by chosen chip size of {size}")
             print(f"{in_tif} of height {height} and width {width}. Is not divisible by chosen chip size of {size}")
         else:
-            #get all the upper left (ul) pixel values of our chips. Combine those into a list of all the chip's ul pixels. 
-            x_chips = width // stride
-            x_ul = [stride * s for s in range(x_chips)]
-            #logging.info(f"x_ul: {x_ul}")
+            #come up with a grid of our the upper left chip corners.
+            xy_ul = grid_calc(width, height, stride)
 
-            y_chips = height // stride
-            y_ul = [stride * s for s in range(y_chips)]
+            #loop though our upper left corners, create a window view of that data
+            for ul_pix in xy_ul:
+                Window = windows.Window(
+                    col_off=ul_pix[0],
+                    row_off=ul_pix[1],
+                    width=size, 
+                    height=size)
 
-            xy_ul = product(x_ul, y_ul) #this is the final list of ul pixel values
-        
-        for ul_pix in xy_ul:
-            Window = windows.Window(
-                col_off=ul_pix[0],
-                row_off=ul_pix[1],
-                width=size, 
-                height=size)
-            #logging.info(Window)
-
-            #get the affine matrix for our new shifted 512x512px chip
-            win_transform = src.window_transform(Window)
-            
-            #read in our window
-            data = src.read(window=Window)
-
-            #check to make sure our chip isn't made up of all zeros (nodata)
-            zeros = np.zeros_like(data)
-            if np.array_equal(data, zeros):
-                logging.info(f"{in_tif} is no data (all zeros). Filtering out of data set.")
-            else:
-                #building a custom jpeg profile for our chip due to some gdal/rasterio bugs in walking from input geotiff to output jpeg
-                profile={'driver': 'JPEG',
-                        'count': src.count,
-                        'dtype': rasterio.ubyte,
-                        'height': size,
-                        'width': size,
-                        'transform': win_transform,
-                        'crs': src_crs}
+                #get the affine matrix for our new shifted 512x512px chip
+                win_transform = src.window_transform(Window)
+                
+                #read in our window's data
+                data = src.read(window=Window)
 
                 #pretty formating of our output chip filenames with column and row counts
-                out_path = os.path.join(out_dir, f"{basename}_{ul_pix[0]}_{ul_pix[1]}.jpg")
-                logging.info(out_path)
-                
-                #write the chip
-                with rasterio.open(out_path, 'w', **profile) as dst:
-                    dst.write(data)
-                    logging.info(f"{out_path}, WROTE")
-                    
-                #get the chip's bounding box geometry, convert it to a Shapely geometery, and append it to the polygon list. 
-                bounds = rasterio.windows.bounds(Window, src.transform)
-                polygon = generate_polygon(bounds)
-                polygons.append(polygon)
+                pretty_row_count = ul_pix[0] // size
+                pretty_col_count = ul_pix[1] // size
+                pretty_basename = f"{basename}_{pretty_row_count}_{pretty_col_count}"
+                out_path = os.path.join(out_dir, pretty_basename + ".jpg")
 
-                #get the name of the chip for the tindex's attribute table. Add all attributes to the attr_dict.
-                basenames.append(basename)
-            
+                #check if a tile is composed completely of no data. if it is, skip it.
+                if is_nodata(data) == True:
+                    logging.info(f"{out_path} is no data (all zeros). Filtering out of data set.")
+                else:
+                    #write the valid data jpeg
+                    write_jpeg(data, src.count, size, win_transform, src_crs, out_path)
+
+                    #get the chip's bounding box geometry, convert it to a Shapely geometery, and append it to the polygon list. 
+                    bounds = rasterio.windows.bounds(Window, src.transform)
+                    polygon = generate_polygon(bounds)
+                    polygons.append(polygon)
+
+                    #print(f"{pretty_basename} bounds: {bounds}")
+                    #print(f"bounds: {bounds}")
+
+                    #print(f"polygons; {polygons}")
+                    #get the name of the chip for the tindex's attribute table. Add all attributes to the attr_dict.
+                    basenames.append(pretty_basename)
+
+    #for name in basenames:
+        #print(f"{name}")
+    #print(f"len of basename: {len(basenames)}")
+    #assemble our polygons and attr_dict into a geodataframe that represents our chip tindex
     attr_dict['filename'] = basenames
-    gdf = make_gdf(polygons, attr_dict)
-            
-    return (gdf)
+    gdf = make_gdf(polygons, attr_dict, src_crs)
 
-#### EDIT THESE #######################
-file_list = r"/media/ross/ssd/00_kahoolawe_dar2015/00_256x256/tif_list.txt"
-usr_out_dir = r"/media/ross/ssd/00_kahoolawe_dar2015/01_retile_for_deeplearning"
-out_gpkg = r"kahoolawe_chip_tindex.gpkg"
-log_name = r'log.txt'
+    del basenames, attr_dict, gdf
 
-#### STOP EDITING ####################
-out_crs = {'init':'epsg:26904'}
-usr_size=512
-usr_overlap=256 #the results of this is 50% overlap (an intial 256x256 image, with 128 of padding on all sides.)
+    #write GeoDataFrame
+    gdf.crs = src_crs
+    #print(f"gdf crs: {gdf.crs}")
+    gdf_path = os.path.join(out_dir, basename + '.gpkg')
 
-log_name = os.path.join(usr_out_dir, log_name)
+    gdf.to_file(gdf_path, driver='GPKG')
+    #print('wrote gdf')
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(message)s",
-    handlers=[
-        logging.FileHandler(log_name)])
-        #logging.StreamHandler()
-    #])
+    logging.info(f"CLOSED, {in_tif}")
+    logging.info("/n")
 
-#open our file list and arguments. Zip them up into a list of arguments and a input file that feeds into multiprocessing's starmap.
-with open(file_list, 'r') as f:
-    in_paths = [line.strip() for line in f]
+    #return (gdf)
 
-args = [[usr_size, usr_overlap, usr_out_dir]] * len(in_paths)
-zipped = zip(args, in_paths)
+if __name__ == "__main__":
+    #handle our input arguments
+    parser = optparse.OptionParser()
 
-#start the pool. Each entry in results will contain a gdf of all the resulting chips.
-pool=multiprocessing.Pool(processes=10)
-results = pool.starmap(chip, zipped)
+    parser.add_option('-f', '--filelist',
+        action="store", dest="file_list",
+        type='string', help="A txt list of absolute file paths, one file per line. Must be tifs.")
 
-pool.close()
-pool.join()
+    parser.add_option('-o', '--outdir',
+        action='store', dest='usr_out_dir',
+        type='string', help='An out directory to stash files. Images, tile indexes, logfiles, etc.')
 
-print(f"Writing final geodataframe.")
-logging.info(f"Writing final geodataframe.")
-#merge all the pd.Dataframes, convert to gpd.GeoDataFrame
-results_df = pd.concat(results, ignore_index=True)
-results_gdf =gpd.GeoDataFrame(results_df, crs=out_crs, geometry='geometry')
+    parser.add_option('-t', '--chipsize',
+        action='store', dest='usr_size',
+        type='int', default=512,
+        help='Size of image chips in pixel (ie. 512 is 512x512px chips.)')
 
-#write GeoDataFrame
-out_path = os.path.join(usr_out_dir, out_gpkg)
-results_gdf.to_file(out_path, driver='GPKG')
+    parser.add_option('-s', '--stride',
+        action='store', dest='usr_overlap',
+        type='int', default=256,
+        help='Amount of image chip overlap in pixels (ie 256 is 50 percent overlap with a chipsize of 512)')
 
-print("Success!")
-logging.info(f"Writing final geodataframe.")
+    options, args = parser.parse_args()
+
+    #setup logging
+    log_name = r'log.txt'
+    log_name = os.path.join(options.usr_out_dir, log_name)
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s %(levelname)s %(message)s", 
+                        datefmt="%H:%M:%S",
+                        handlers=[logging.FileHandler(log_name)])
+
+    #do some checks to make sure we can find inputs and outputs.
+    if os.path.exists(options.usr_out_dir):
+        pass
+    else:
+        print('ERROR: Cannot find out directory. Abort.')
+        logging.error('ERROR: Cannot find out directory. Abort.')
+        sys.exit(0)
+
+    if os.path.exists(options.file_list):
+        pass
+    else:
+        print('ERROR: Cannot find input filelist. Abort.')
+        logging.error('ERROR: Cannot find input filelist. Abort.')
+        sys.exit(0)
+
+    #open our file list and arguments. Zip them up into a list of arguments and a input file that feeds into multiprocessing's starmap.
+    with open(options.file_list, 'r') as f:
+        in_paths = [line.strip() for line in f]
+
+    args = [[options.usr_size, options.usr_overlap, options.usr_out_dir]] * len(in_paths)
+    zipped = zip(args, in_paths)
+
+    #start the pool. Each entry in results will contain a gdf of all the resulting chips.
+    pool=multiprocessing.Pool(processes=8)
+    results = pool.starmap_async(chip, zipped)
+
+    while not results.ready():
+        print(f"retile_for_deeplearning.py | {results._number_left} of {len(in_paths)} files remain.")
+        time.sleep(5)
+
+    pool.close()
+    pool.join()
+
+'''
+    print(f"Writing final geodataframe.")
+    logging.info(f"Writing final geodataframe.")
+    #merge all the pd.Dataframes, convert to gpd.GeoDataFrame
+    results_df = pd.concat(results, ignore_index=True)
+    results_gdf =gpd.GeoDataFrame(results_df, crs=out_crs, geometry='geometry')
+
+    #write GeoDataFrame
+    out_path = os.path.join(usr_out_dir, out_gpkg)
+    results_gdf.to_file(out_path, driver='GPKG')
+
+    print("Success!")
+    logging.info(f"Writing final geodataframe.")'''
