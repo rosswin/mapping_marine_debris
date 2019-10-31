@@ -16,6 +16,7 @@ import rasterio
 from rasterio import windows
 from rasterio.enums import Resampling
 from rasterio.mask import mask
+
 import pandas as pd
 import geopandas as gpd
 import numpy as np
@@ -28,14 +29,17 @@ from shapely import geometry
 
 def grid_calc(width, height, stride):
     #get all the upper left (ul) pixel values of our chips. Combine those into a list of all the chip's ul pixels. 
-    x_chips = width // stride
+    #NOTE: THESE ARE THE OPPOSITE OF WHAT I THINK THEY SHOULD BE (HEIGHT/WIDTH SWAPPED)
+    #I DON"T KNOW WHY IT WORKS DONT TOUCH THIS FUNCTION UNLESS YOURE GOING TO OWN IT.
+    x_chips = height // stride
     x_ul = [stride * s for s in range(x_chips)]
 
-    y_chips = height // stride
-    y_ul = [stride * s for s in range(y_chips)]
+    y_chips = width // stride
+    y_ul = [stride * s1 for s1 in range(y_chips)]
 
     #xy_ul = product(x_ul, y_ul) #this is the final list of ul pixel values
-    #print(f"xy_ul: {len(xy_ul)}")
+    print(f"x chips: {len(x_ul)}")
+    print(f"y chips: {len(y_ul)}")
 
     xy_ul = []
     for x in x_ul:
@@ -48,30 +52,19 @@ def grid_calc(width, height, stride):
 
     return xy_ul
 
-def build_window(in_src, upper_left_pix_coords, in_chip_size, in_chip_stride):
-    row_start = upper_left_pix_coords[0]
-    row_stop = upper_left_pix_coords[0] + in_chip_size
-    col_start = upper_left_pix_coords[1]
-    col_stop = upper_left_pix_coords[1] + in_chip_size
-    
-    #print(row_start, col_start, row_stop, col_stop)
-    
-    out_window = windows.Window.from_slices((row_start, row_stop), (col_start, col_stop))
-    
-    '''
-    out_window = windows.Window(col_off = upper_left_pix_coords[0],
-                                row_off = upper_left_pix_coords[1],
+def build_window(in_src, in_xy_ul, in_chip_size, in_chip_stride):
+
+    out_window = windows.Window(col_off = in_xy_ul[0],
+                                row_off = in_xy_ul[1],
                                 width=in_chip_size,
-                                height=in_chip_size)'''
+                                height=in_chip_size)
     
-    #out_win_transform = in_src.window_transform(out_window)
     out_win_transform = windows.transform(out_window, in_src.transform)
     #print(out_win_transform)
     
-    
-    row_id = upper_left_pix_coords[0] // in_chip_stride
-    col_id = upper_left_pix_coords[1] // in_chip_stride
-    out_win_id = f'{row_id}_{col_id}'
+    col_id = in_xy_ul[1] // in_chip_stride
+    row_id = in_xy_ul[0] // in_chip_stride
+    out_win_id = f'{col_id}_{row_id}'
     
     out_win_bounds = windows.bounds(out_window, out_win_transform)
     #print(out_win_bounds)
@@ -142,7 +135,7 @@ def coords_2_pix_gdf(gdf):
     
     return gdf
 
-def pix_2_coords(in_bounds, in_affine):
+def pix_2_xy(in_bounds, in_affine):
     xmin = in_bounds[0]
     ymin = in_bounds[1]
     xmax = in_bounds[2]
@@ -153,7 +146,8 @@ def pix_2_coords(in_bounds, in_affine):
     
     pix_coords = rasterio.transform.xy(in_affine, xs, ys)
     
-    pix_bounds = (pix_coords[0][1], pix_coords[1][1], pix_coords[0][0], pix_coords[1][0])
+    pix_bounds = (pix_coords[0][0], pix_coords[1][1], pix_coords[0][1], pix_coords[1][0] )
+    #print(f"pix bounds: {pix_bounds}")
     return pix_bounds
 
 def return_intersection(in_tindex, in_annotations, unique_annotation_id):
@@ -166,16 +160,15 @@ def return_intersection(in_tindex, in_annotations, unique_annotation_id):
 
 def create_cindex(in_file, in_size, in_stride, in_out_dir):
     basename = os.path.splitext(os.path.basename(in_file))[0]
-    print(basename)
+    #print(basename)
     #print(f"{in_file}, {in_size}, {in_stride}, {in_out_dir}")
     gdfs = []
-    pos_files = []
-    neg_files = []
-    with rasterio.open(in_file, 'r') as src:
 
-        print(f"src height/width: {src.height}/{src.width}")
-        print(f"src bounds: {src.bounds}")
-        print(f"src transform: {src.transform}")
+    with rasterio.open(in_file, 'r') as src:
+        print(f"Initial Width/Height: {src.width}, {src.height}")
+        #print(f"src height/width: {src.height}/{src.width}")
+        #print(f"src bounds: {src.bounds}")
+        #print(f"src transform: {src.transform}")
         
         upper_left_grid = grid_calc(src.width, src.height, in_stride)
         
@@ -185,7 +178,8 @@ def create_cindex(in_file, in_size, in_stride, in_out_dir):
             col_stop = ul[0] + in_size
             row_start = ul[1]
             row_stop = ul[1] + in_size
-            slices = (col_start, row_start, col_stop, row_stop)
+            #slices = (col_start, row_start, col_stop, row_stop)
+            colrow_bounds = (col_start, row_start, col_stop, row_stop)
                 
             win, win_transform, win_bounds, win_id = build_window(src, ul, in_size, in_stride)
 
@@ -193,8 +187,10 @@ def create_cindex(in_file, in_size, in_stride, in_out_dir):
             #caused every overlpping tile to shift 256 pix in the x and y direction (removed overlap, doubled area covered by chip tindex)
             #therefore, the win_bounds variable above should not currently be used. I need to investigate further.
             
-            ret = pix_2_coords(slices, src.transform)
-            
+            #ret = pix_2_coords(slices, src.transform)
+
+            ret = pix_2_xy(colrow_bounds, src.transform)
+            #print(f"ret: {ret}")
             #create and store the chip's geometry (the bounding box of the image chip)
             envelope = geometry.box(*ret)
             geometries=[]
@@ -257,42 +253,71 @@ def write_annotations(in_gdf, out_path='none'):
                          'label_name', 'label', 'label_int']]
     
     if out_path != 'none':
-        out_gdf.to_csv(out_path)
+        out_gdf.to_csv(out_path, index=False)
     
     return out_gdf
 
 def mask_raster(in_poly, src_raster, in_out_path):
-    with rasterio.open(src_raster, 'r') as src:
-        out_data, out_transform = mask(src, [in_poly], crop=True)
-         
-        write_jpeg(out_data, src.count, out_data.shape[1], out_transform, crs.crs, in_out_path)
+    try:
+        with rasterio.open(src_raster, 'r') as src:
+            out_data, out_transform = mask(src, [in_poly], crop=True)
+    except:
+        print("ERROR 1 in mask_raster:")
+        print("Could not read cropped data/transform.")
+        sys.exit(0)
+
+    write_jpeg(out_data, src.count, out_data.shape[1], out_transform, src.crs, in_out_path)
 
 def backbone(args, in_f):
-    logging.info(f"backbone: {in_f}")
-    #unpack our args list.
-    in_anno = args[0] 
-    size = args[1]
-    overlap = args[2]
-    out_dir = args[3]
-    logging.info(f"cindex: {in_f}")
-    #Chip out our image, return a cindex
-    cindex = create_cindex(in_f, in_chip_size, in_chip_stride, in_out_dir)
-    logging.info(f"intersect: {in_f}")
-    #find all the annotations that intersect each chip. Filter chips with no annotations, filter annotations that are not fully contained within a chip.
-    intersect = return_intersection(cindex, in_anno, 'unique_pt_id')
-    logging.info(f"writing positive files: {in_f}")
-    #generate a list of positive chips in the annotation database.
-    pos_chips = intersect['filename'].unique().tolist()
-    
-    pos_chips_gdf = cindex[cindex['filename'].isin(pos_chips)]
-
-    for i, row in pos_chips_gdf[['geometry', 'basename','filename']].iterrows():
-        polygon = row["geometry"]
-        src_raster = row['basename']
-        out_raster_path = os.path.join(out_dir, f"{row['filename']}.jpg")
+    try:
+        #print(f"backbone: {in_f}")
+        logging.info(f"backbone: {in_f}")
+        #unpack our args list.
+        anno_path = args[0] 
+        in_anno = gpd.read_file(anno_path)
         
-        #this also write our positive image chip to a jpeg located at out_raster_path
-        mask_raster(polygon, src_raster, out_raster_path)
+        size = args[1]
+        stride = args[2]
+        out_dir = args[3]
+        #print(f"{in_anno}, {size}, {stride}, {out_dir}")
+    except:
+        print("Error loading arguments into backbone. Check your args.")
+
+    try:
+        logging.info(f"cindex: {in_f}")
+        #Chip out our image, return a cindex
+        cindex = create_cindex(in_f, size, stride, out_dir)
+    except:
+        print("Error in cindex operation!")
+
+    try:
+        logging.info(f"intersect: {in_f}")
+        #find all the annotations that intersect each chip. Filter chips with no annotations, filter annotations that are not fully contained within a chip.
+        intersect = return_intersection(cindex, in_anno, 'unique_pt_id')
+    except:
+        print("Error in intersect operation!")
+
+    try:
+        logging.info(f"writing positive files: {in_f}")
+        #generate a list of positive chips in the annotation database.
+        pos_chips = intersect['filename'].unique().tolist()
+        
+        pos_chips_gdf = cindex[cindex['filename'].isin(pos_chips)]
+        #print(pos_chips_gdf.head())
+
+        for i, row in pos_chips_gdf[['geometry', 'basename','filename']].iterrows():
+            polygon = row["geometry"]
+            src_raster = row['basename']
+            out_raster_path = os.path.join(out_dir, f"{row['filename']}.jpg")
+            #print(f"{polygon}, {src_raster}, {out_raster_path}")
+            #this also write our positive image chip to a jpeg located at out_raster_path
+            mask_raster(polygon, src_raster, out_raster_path)
+    except:
+        print("Error when writing images!")
+        print(f"polygon: {polygon}")
+        print(f"src_raster: {src_raster}")
+        print(f"out_raster_path: {out_raster_path}")
+
     logging.info(f"backbone COMPLETE: {in_f}")
     #return our annotations to be bound into a island-wide annotation data set.
     
@@ -330,59 +355,87 @@ if __name__ == "__main__":
 
     options, args = parser.parse_args()
 
-#setup logging
-log_name = r'log.txt'
-log_name = os.path.join(options.usr_out_dir, log_name)
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s %(levelname)s %(message)s", 
-                    datefmt="%H:%M:%S",
-                    handlers=[logging.FileHandler(log_name)])
+    #setup logging
+    log_name = r'log.txt'
+    log_name = os.path.join(options.usr_out_dir, log_name)
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s %(levelname)s %(message)s", 
+                        datefmt="%H:%M:%S",
+                        handlers=[logging.FileHandler(log_name)])
 
-#do some checks to make sure we can find inputs and outputs.
-if os.path.exists(options.usr_out_dir):
-    pass
-else:
-    print('ERROR: Cannot find out directory. Abort.')
-    logging.error('ERROR: Cannot find out directory. Abort.')
-    sys.exit(0)
+    #do some checks to make sure we can find inputs and outputs.
+    if os.path.exists(options.usr_out_dir):
+        pass
+    else:
+        print('ERROR: Cannot find out directory. Abort.')
+        logging.error('ERROR: Cannot find out directory. Abort.')
+        sys.exit(0)
 
-if os.path.exists(options.file_list):
-    pass
-else:
-    print('ERROR: Cannot find input filelist. Abort.')
-    logging.error('ERROR: Cannot find input filelist. Abort.')
-    sys.exit(0)
+    if os.path.exists(options.file_list):
+        pass
+    else:
+        print('ERROR: Cannot find input filelist. Abort.')
+        logging.error('ERROR: Cannot find input filelist. Abort.')
+        sys.exit(0)
 
-#open our file list and arguments. Zip them up into a list of arguments and a input file that feeds into multiprocessing's starmap.
+    if os.path.exists(options.in_annotation):
+        pass
+    else:
+        print('ERROR: Cannot find input annotations. Abort.')
+        logging.error('ERROR: Cannot find input annotations. Abort.')
+        sys.exit(0)
+
+    #print("exists")
+    '''
+    with open(options.file_list, 'r') as f:
+        in_paths = [line.strip() for line in f]
+    
+    for fi in in_paths:
+        inter = backbone((options.in_annotation, 
+                options.usr_size, 
+                options.usr_stride, 
+                options.usr_out_dir),
+                fi)
+    '''
+    #open our file list and arguments. Zip them up into a list of arguments and a input file that feeds into multiprocessing's starmap.
     with open(options.file_list, 'r') as f:
         in_paths = [line.strip() for line in f]
 
     args = [[options.in_annotation, options.usr_size, options.usr_stride, options.usr_out_dir]] * len(in_paths)
     zipped = zip(args, in_paths)
 
+    #print(f"args {args}")
+
     #start the pool. Each entry in results will contain a gdf of all the resulting chips.
     pool=multiprocessing.Pool(processes=8)
-    results = pool.starmap_async(backbone, zipped)
+    map_results = pool.starmap_async(backbone, zipped)
 
-    while not results.ready():
-        print(f"retile_for_deeplearning_V2.py | {results._number_left} of {len(in_paths)} files remain.")
+    
+
+    while not map_results.ready():
+        print(f"retile_for_deeplearning_V2.py | {map_results._number_left} of {len(in_paths)} files remain.")
         time.sleep(5)
 
     pool.close()
     pool.join()
 
+    results = map_results.get()
+
     print(f"Writing final annotations.")
     logging.info(f"Writing final annotations.")
     #merge all the pd.Dataframes, convert to gpd.GeoDataFrame
     results_df = pd.concat(results, ignore_index=True)
-    out_df = results_df[['basename', 'filename', 
-                        'x_min', 'y_min', 'x_max', 'y_max', 
-                        'px_x_min', 'px_y_min', 'px_x_max', 'px_y_max', 
-                        'label_name', 'label', 'label_int']]
+    results_gdf = gpd.GeoDataFrame(results_df, geometry='geometry')
+    #print(results_df.head())
     
     #write annotations to csv
     out_path = os.path.join(options.usr_out_dir, 'final_annotations.csv')
-    out_df.to_csv(out_path)
+    write_annotations(results_gdf, out_path)
 
     print("SUCCESS!")
     logging.info(f"SUCCESS!")
+
+#out_df = results_df[['basename', 'filename', 
+#'x_min', 'y_min', 'x_max', 'y_max', 
+#'px_x_min', 'px_y_min', 'px_x_max', 'px_y_max', 
+#'label_name', 'label', 'label_int']]
