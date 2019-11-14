@@ -1,6 +1,42 @@
 #!/usr/bin/env python
 # coding: utf-8
 
+'''
+This script does 3 things:
+
+1) takes a set of Geotiffs and "chips" the images with user-specified image size (in pixels) and overlap (in pixels).
+2) writes a "chip index" (cindex), which are the envelopes of each chip and its affine transformation matrix (used for converting lat/long to pixel coordinates)
+3) compares the cindex against a set of annotation polygons, the chips that contain an annotation (positive chips) are written to jpeg images for use in deep learning
+4) Reformats the input annotations with pixel coordinates for each chips, writes those to a CSV file for use in deep learning.
+
+INPUTS:
+1) -f --filelist:    a .txt file of absolute paths to geotiff files to be chipped
+2) -o --outdir:      a directory to store the cindex, jpegs, reformatted annotations, and a log file
+3) -a --annotations: a geopackage that comprises all of our annotations. Right now this is finicky and only designed to work with 2015 DAR coastal data
+
+OTHER FLAGS:
+1) -c --chipsize: the desired output chip size in pixels. Default is 512x512px
+2) -s --stride:   the desired overlap in pixels. Default is 256x256px (50% overlap if using default chipsize)
+
+OUTPUTS:
+1) cindex: a geopackage. Represents envelopes of all chips. Currently defaults to the input geotiff's name with "_cindex" appended.
+2) jpegs: positive chip jpegs to be used as the imagery in deep learning.
+3) final_annotations.csv: the reformatted annotations with all info you could possibly need for deep learning
+4) log.txt: a log file. Hopefully you don't need it.
+
+NOTE:
+This script is finicky and only works on DAR 2015 imagery. The code needs to be reformatted to take generic data sets/annotation formats. 
+
+TODO:
+1) Generalize the code to read/write more than geotiffs/jpegs
+2) Generalize the code to take points and polygons as annotation input. Maybe write lists of pos/neg chips for point files?
+3) allow more user control of things (like num of CPU cores, whether to write pos/neg csv files, control out annotation format, etc.)
+4) maybe allow other formats- such as PASCAL VOC
+5) currently only writes 3 band images.
+6) currently requires input geotiffs's row/col counts to be exactly divisible by chip size
+7) script kicks out wierd ERROR: 4. It is working though... it must be a gdal or rasterio thing. Research required.
+'''
+
 import os
 import sys
 import time
@@ -38,8 +74,8 @@ def grid_calc(width, height, stride):
     y_ul = [stride * s1 for s1 in range(y_chips)]
 
     #xy_ul = product(x_ul, y_ul) #this is the final list of ul pixel values
-    print(f"x chips: {len(x_ul)}")
-    print(f"y chips: {len(y_ul)}")
+    #print(f"x chips: {len(x_ul)}")
+    #print(f"y chips: {len(y_ul)}")
 
     xy_ul = []
     for x in x_ul:
@@ -99,6 +135,8 @@ def write_jpeg(in_data, in_count, in_size, in_win_transform, in_src_crs, in_out_
         'width': in_size,
         'transform': in_win_transform,
         'crs': in_src_crs}
+
+    print(f"profile sixe: {in_size}")
         
     #write the chip
     with rasterio.open(in_out_path, 'w', **profile) as dst:
@@ -125,13 +163,11 @@ def coords_2_pix_gdf(gdf):
     gdf['x_max'] = gdf.bounds.maxx
     gdf['y_max'] = gdf.bounds.maxy
     
-    gdf['px_x_min'] = (gdf['x_min'] - gdf['a2']) // gdf['a0']
-    gdf['px_x_max'] = (gdf['x_max'] - gdf['a2']) // gdf['a0']
-    
-    #NOTE: in coordinates we the origin as the bottom left corner. In pixel coordinates, we set the origin at the top left corner.
-    #Anyways, we're flipping our pix min/max here so that our origin starts at the top right corner.
-    gdf['px_y_max'] = (gdf['y_min'] - gdf['a5']) // gdf['a4']
-    gdf['px_y_min'] = (gdf['y_max'] - gdf['a5']) // gdf['a4']
+    gdf['px_x_min'] = (gdf['x_min'] - gdf['c_x_min']) // gdf['a0']
+    gdf['px_x_max'] = (gdf['x_max'] - gdf['c_x_min']) // gdf['a0']
+
+    gdf['px_y_min'] = (gdf['y_min'] - gdf['c_y_min']) // abs(gdf['a4'])
+    gdf['px_y_max'] = (gdf['y_max'] - gdf['c_y_min']) // abs(gdf['a4'])
     
     return gdf
 
@@ -165,7 +201,7 @@ def create_cindex(in_file, in_size, in_stride, in_out_dir):
     gdfs = []
 
     with rasterio.open(in_file, 'r') as src:
-        print(f"Initial Width/Height: {src.width}, {src.height}")
+        #print(f"Initial Width/Height: {src.width}, {src.height}")
         #print(f"src height/width: {src.height}/{src.width}")
         #print(f"src bounds: {src.bounds}")
         #print(f"src transform: {src.transform}")
@@ -185,11 +221,12 @@ def create_cindex(in_file, in_size, in_stride, in_out_dir):
 
             #NOTE: I had to write my own affine lookup to get bounding boxs from windows (pix_2_coords). Rasterio's windows.bounds(win, win_transform) 
             #caused every overlpping tile to shift 256 pix in the x and y direction (removed overlap, doubled area covered by chip tindex)
-            #therefore, the win_bounds variable above should not currently be used. I need to investigate further.
-            
-            #ret = pix_2_coords(slices, src.transform)
+            #therefore, the win_bounds variable above should not currently be used. I need to investigate further. I kind of like this better though,
+            #because we store everything we need to convert between lat/longs and pixel coordinates in the tile index. It could make it easier to convert
+            #our model's output bounding boxes back to lats/longs.
 
             ret = pix_2_xy(colrow_bounds, src.transform)
+            #print(ret)
             #print(f"ret: {ret}")
             #create and store the chip's geometry (the bounding box of the image chip)
             envelope = geometry.box(*ret)
@@ -212,14 +249,22 @@ def create_cindex(in_file, in_size, in_stride, in_out_dir):
             col_rot = []
             px_height = []
             row_off = []
-            
+            c_x_min = []
+            c_y_min = []
+            c_x_max = []
+            c_y_max = []
+
             px_width.append(win_transform[0])
             row_rot.append(win_transform[1])
             col_off.append(win_transform[2])
             col_rot.append(win_transform[3])
             px_height.append(win_transform[4])
             row_off.append(win_transform[5])
-            
+            c_x_min.append(ret[0])
+            c_y_min.append(ret[1])
+            c_x_max.append(ret[2])
+            c_y_max.append(ret[3])
+
             #create a single chip feature with attributes and all
             attr_dict = {}
             attr_dict['basename'] = attr_basename
@@ -230,8 +275,13 @@ def create_cindex(in_file, in_size, in_stride, in_out_dir):
             attr_dict['a3'] = col_rot
             attr_dict['a4'] = px_height
             attr_dict['a5'] = row_off
+            attr_dict['c_x_min'] = c_x_min
+            attr_dict['c_y_min'] = c_y_min
+            attr_dict['c_x_max'] = c_x_max
+            attr_dict['c_y_max'] = c_y_max
         
             chip_gdf = make_gdf(geometries, attr_dict, src.crs)
+            chip_gdf.head()
 
             #append our single chip feature to a list of all chips. Later we will merge all the single chips into a big chip index (cindex).
             gdfs.append(chip_gdf)
@@ -257,16 +307,17 @@ def write_annotations(in_gdf, out_path='none'):
     
     return out_gdf
 
-def mask_raster(in_poly, src_raster, in_out_path):
+def mask_raster(in_poly, src_raster, in_out_path, in_size):
     try:
-        with rasterio.open(src_raster, 'r') as src:
+        #Note: this is where the 3-band requirement is hard-coded. We could remove this if we were to feed the src.count into this function
+        with rasterio.open(src_raster, 'r', out_shape=(in_size, in_size, 3), resampling=Resampling.bilinear) as src:
             out_data, out_transform = mask(src, [in_poly], crop=True)
     except:
         print("ERROR 1 in mask_raster:")
         print("Could not read cropped data/transform.")
         sys.exit(0)
 
-    write_jpeg(out_data, src.count, out_data.shape[1], out_transform, src.crs, in_out_path)
+    write_jpeg(out_data, src.count, in_size, out_transform, src.crs, in_out_path)
 
 def backbone(args, in_f):
     try:
@@ -311,7 +362,7 @@ def backbone(args, in_f):
             out_raster_path = os.path.join(out_dir, f"{row['filename']}.jpg")
             #print(f"{polygon}, {src_raster}, {out_raster_path}")
             #this also write our positive image chip to a jpeg located at out_raster_path
-            mask_raster(polygon, src_raster, out_raster_path)
+            mask_raster(polygon, src_raster, out_raster_path, size, )
     except:
         print("Error when writing images!")
         print(f"polygon: {polygon}")
@@ -326,6 +377,7 @@ def backbone(args, in_f):
 #######################
 #### END FUNCTIONS ####
 #######################
+
 if __name__ == "__main__":
     #handle our input arguments
     parser = optparse.OptionParser()
