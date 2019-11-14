@@ -26,6 +26,7 @@ OUTPUTS:
 
 NOTE:
 This script is finicky and only works on DAR 2015 imagery. The code needs to be reformatted to take generic data sets/annotation formats. 
+Everythign here is still a rough draft. I'll try to keep a log of issues and incrementally improve over time.
 
 TODO:
 1) Generalize the code to read/write more than geotiffs/jpegs
@@ -34,7 +35,14 @@ TODO:
 4) maybe allow other formats- such as PASCAL VOC
 5) currently only writes 3 band images.
 6) currently requires input geotiffs's row/col counts to be exactly divisible by chip size
-7) script kicks out wierd ERROR: 4. It is working though... it must be a gdal or rasterio thing. Research required.
+7) script kicks out wierd ERROR: 4. It is working though... it must be a gdal or rasterio thing. Research required. 
+    NOTE: this may be resolved in rasterio v1.1. https://github.com/mapbox/rasterio/commit/eb6549ac626a46dc52584fa2ac7888f5c4ddbe3a
+8) There is heavy distortion in the output edge jpegs (prob from resampling). This is a really, really big deal. Should be fixed asap.
+9) There is a potential unaddressed edge case. If annotation boxes are vary large, and the chip size is very small, there may not be
+    an image chip that fully contains the annotation. The script would currently skip that. It's not really an issue given our data,
+    so I am skipping for now. See the NOTE in return_intersection() on how to get started repairing this issue.  
+10) figure out how to make the logs work with multiprocessing. Currently a jumbled mess. Could also improve error trapping/reporting/handling.
+
 '''
 
 import os
@@ -136,7 +144,7 @@ def write_jpeg(in_data, in_count, in_size, in_win_transform, in_src_crs, in_out_
         'transform': in_win_transform,
         'crs': in_src_crs}
 
-    print(f"profile sixe: {in_size}")
+    #print(f"profile size: {in_size}")
         
     #write the chip
     with rasterio.open(in_out_path, 'w', **profile) as dst:
@@ -189,9 +197,19 @@ def pix_2_xy(in_bounds, in_affine):
 def return_intersection(in_tindex, in_annotations, unique_annotation_id):
     inter = gpd.overlay(in_tindex, in_annotations)
     inter['intersect_area'] = inter['geometry'].area
-    filter_partial_annotations = inter[inter['intersect_area'] == 1.0]
+    #print(f"length of intersection: {len(inter)}")
+    #with pd.option_context('display.max_rows', None, 'display.max_columns', None):
+        #print(inter[['filename', 'unique_pt_id', 'intersect_area']])
+
+    #NOTE: this is where you would modify the code so that the largest intesection is chosen. Later you would need to make sure the
+    #anno bounding box is clipped to the image's extent. For more info see the info in the header about edge cases involving anno
+    #boxes too big to be 100% contained by an image chip.
+    filter_partial_annotations = inter[(inter['intersect_area'] % 1.0) == 0]
+
+    #the script requires a unique anno id to filter down where a single anno is contained in multiple images. This may not be
+    #needed if we just take the max intersection values. Prob need to fix this if we're going to generalize to unseen data.
     remove_duplicates = filter_partial_annotations.drop_duplicates(subset=unique_annotation_id)
-    
+
     return remove_duplicates
 
 def create_cindex(in_file, in_size, in_stride, in_out_dir):
@@ -310,8 +328,12 @@ def write_annotations(in_gdf, out_path='none'):
 def mask_raster(in_poly, src_raster, in_out_path, in_size):
     try:
         #Note: this is where the 3-band requirement is hard-coded. We could remove this if we were to feed the src.count into this function
-        with rasterio.open(src_raster, 'r', out_shape=(in_size, in_size, 3), resampling=Resampling.bilinear) as src:
+        #with rasterio.open(src_raster, 'r', out_shape=(in_size, in_size, 3), resampling=Resampling.bilinear) as src:
+            #out_data, out_transform = mask(src, [in_poly], crop=True)
+        
+        with rasterio.open(src_raster, 'r') as src:
             out_data, out_transform = mask(src, [in_poly], crop=True)
+
     except:
         print("ERROR 1 in mask_raster:")
         print("Could not read cropped data/transform.")
@@ -460,12 +482,12 @@ if __name__ == "__main__":
 
     #start the pool. Each entry in results will contain a gdf of all the resulting chips.
     pool=multiprocessing.Pool(processes=8)
-    map_results = pool.starmap_async(backbone, zipped)
 
-    
+
+    map_results = pool.starmap_async(backbone, zipped, chunksize=1) #chunksize=1 is to make the while loop below display the correct info. I have no idea what it does. Risky.
 
     while not map_results.ready():
-        print(f"retile_for_deeplearning_V2.py | {map_results._number_left} of {len(in_paths)} files remain.")
+        print(f"retile_for_deeplearning_V2.py | {map_results._number_left} of {len(in_paths)} files remain.") #_number_left is prob wrong way to do this. https://stackoverflow.com/questions/49807345/multiprocessing-pool-mapresult-number-left-not-giving-result-i-would-expect
         time.sleep(5)
 
     pool.close()
