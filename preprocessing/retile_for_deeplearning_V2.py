@@ -287,7 +287,7 @@ def create_cindex(in_file, in_size, in_stride, in_out_dir):
             gdfs.append(chip_gdf)
             
     #merge all those little chip features together into our master cindex for the input image 
-    cindex_gdf_path = os.path.join(in_out_dir, f"{basename}_chip_tindex.gpkg")
+    cindex_gdf_path = os.path.join(in_out_dir, f"{basename}_cindex.gpkg")
     cindex_gdf = gpd.GeoDataFrame(pd.concat(gdfs, ignore_index=True))
     cindex_gdf.crs = src.crs
     cindex_gdf.to_file(cindex_gdf_path, driver='GPKG')
