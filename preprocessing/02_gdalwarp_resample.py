@@ -36,8 +36,8 @@ size = 512
 desired_height_width = (size, size)
 multiples_of_size = [size * i for i in range(1,100)]
 
-file_list = f"/media/ross/ssd/03_niihau_dar2015/01_gdaltraceoutline/tif_list.txt"
-out_dir = f"/media/ross/ssd/03_niihau_dar2015/02_gdalwarp_resample"
+file_list = f"/media/ross/ssd/06_maui/01_gto/tif_list.txt"
+out_dir = f"/media/ross/ssd/06_maui/02_gis_images"
 #cutline_dir = f"/media/ross/ssd/02_molokai_dar2015/tiles_shp/03_gdal_trace_outline_clean"
 
 with open(file_list, 'r') as f:
@@ -51,5 +51,5 @@ for path in in_paths:
     gdalwarp_resample(path)
 
 '''
-with ProcessPoolExecutor() as executor:
+with ProcessPoolExecutor(max_workers=10) as executor:
     executor.map(gdalwarp_resample, in_paths)

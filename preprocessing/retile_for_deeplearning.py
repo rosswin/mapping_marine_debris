@@ -344,7 +344,7 @@ def mask_raster(in_poly, src_raster, in_out_path, in_size):
 def backbone(args, in_f):
     try:
         #print(f"backbone: {in_f}")
-        logging.info(f"backbone: {in_f}")
+        print(f"backbone: {in_f}")
         #unpack our args list.
         anno_path = args[0] 
         in_anno = gpd.read_file(anno_path)
@@ -352,6 +352,7 @@ def backbone(args, in_f):
         size = args[1]
         stride = args[2]
         out_dir = args[3]
+        logging.info(f'size: {args[1]}, stride: {args[2]}, out_dir: {args[3]}')
         #print(f"{in_anno}, {size}, {stride}, {out_dir}")
     except:
         print("Error loading arguments into backbone. Check your args.")
