@@ -1,7 +1,7 @@
 common commands to copy and paste for preprocessing 2015 DAR aerial imagery
 
 #GDAL WARP- CLIP WITH CUTLINES
-ls *.tif | parallel --tag gdalwarp -srcnodata 1 -dstnodata 0 -crop_to_cutline -cutline /{.}.shp {} gdalwarp/{} 2>&1 | tee -a gdalwarp/log.txt
+
 
 #GDAL TRANSLATE- CLOUD COMPATIBLE GEOTIFFS!!!
 ls *.tif | parallel gdal_translate -of GTiff -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "COMPRESS=JPEG" -stats {} ../01_gdaltranslate/{} 2>&1 | tee -a ../01_gdaltranslate/log.txt
