@@ -1,6 +1,8 @@
 common commands to copy and paste for preprocessing 2015 DAR aerial imagery
 
 #GDAL WARP- CLIP WITH CUTLINES
+ls *.tif | parallel -q gdalwarp -srcnodata "1 1 1" -dstnodata "0 0 0" -crop_to_cutline -cutline /media/ross/data01/02_data/DAR_Coastal_2015/kahoolawe/cutlines/gdal_trace_outline/{.}.shp $PWD/{} $PWD/gdalwarp/{} 2>&1 | tee -a $PWD/gdalwarp/log.txt
+ls *.tif | parallel --tag gdalwarp -srcnodata 1 -dstnodata 0 -crop_to_cutline -cutline /{.}.shp {} gdalwarp/{} 2>&1 | tee -a gdalwarp/log.txt
 
 
 #GDAL TRANSLATE- CLOUD COMPATIBLE GEOTIFFS!!!
@@ -29,10 +31,3 @@ ls *.gpkg | parallel -q ogr2ogr -f "ESRI Shapefile" ../gdal_trace_outline_handed
 #too many files for ls. Write to filelist with relative path. Note: if you give find an absolute path, you will get an abs path.
 find /media/ross/ssd/00_2015_DAR_marinedebris/kahoolawe/03_gdal_retile_512x512 -type f -name "*.jpg" > jpg_list.txt
 
-sudo docker run -it -v ~/2015-dar-coastal-tfodapi-20191217/:/data/ wrw:tfodapi bash
-
-ssh -L <your-tensorboard-port>:localhost:<your-tensorboard-port> <your-username>@<your.public.ip>
-
-sudo azcopy --source https://<your-storage-account>.blob.core.windows.net/<your-container> --recursive --destination ./ --source-key <INSERT-YOUR-KEY-HERE>
-
-sudo docker run -it -v ~/2015-dar-coastal/:/2015-dar-coastal/ wrw:tfodapi bash
