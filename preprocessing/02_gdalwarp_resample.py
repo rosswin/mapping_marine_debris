@@ -36,8 +36,8 @@ size = 512
 desired_height_width = (size, size)
 multiples_of_size = [size * i for i in range(1,100)]
 
-file_list = f"/media/ross/ssd/06_maui/01_gto/tif_list.txt"
-out_dir = f"/media/ross/ssd/06_maui/02_gis_images"
+file_list = f"/media/ross/HD-QLU3/imagery/2015_dar_coastal/07_hawaii/01_gto/tif_list.txt"
+out_dir = f"/media/ross/HD-QLU3/imagery/2015_dar_coastal/07_hawaii/02_gwr"
 #cutline_dir = f"/media/ross/ssd/02_molokai_dar2015/tiles_shp/03_gdal_trace_outline_clean"
 
 with open(file_list, 'r') as f:
