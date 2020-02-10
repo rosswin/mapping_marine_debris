@@ -2,7 +2,7 @@
 # coding: utf-8
 
 '''
-This script does 3 things:
+This script does 4 things:
 
 1) takes a set of Geotiffs and "chips" the images with user-specified image size (in pixels) and overlap (in pixels).
 2) writes a "chip index" (cindex), which are the envelopes of each chip and its affine transformation matrix (used for converting lat/long to pixel coordinates)
@@ -105,7 +105,7 @@ def build_window(in_src, in_xy_ul, in_chip_size, in_chip_stride):
     
     out_win_transform = windows.transform(out_window, in_src.transform)
     #print(out_win_transform)
-    
+     
     col_id = in_xy_ul[1] // in_chip_stride
     row_id = in_xy_ul[0] // in_chip_stride
     out_win_id = f'{col_id}_{row_id}'
@@ -214,7 +214,7 @@ def return_intersection(in_tindex, in_annotations, unique_annotation_id):
 
 def create_cindex(in_file, in_size, in_stride, in_out_dir):
     basename = os.path.splitext(os.path.basename(in_file))[0]
-    #print(basename)
+    #print(f"basename: {basename}")
     #print(f"{in_file}, {in_size}, {in_stride}, {in_out_dir}")
     gdfs = []
 
@@ -244,7 +244,6 @@ def create_cindex(in_file, in_size, in_stride, in_out_dir):
             #our model's output bounding boxes back to lats/longs.
 
             ret = pix_2_xy(colrow_bounds, src.transform)
-            #print(ret)
             #print(f"ret: {ret}")
             #create and store the chip's geometry (the bounding box of the image chip)
             envelope = geometry.box(*ret)
@@ -286,7 +285,7 @@ def create_cindex(in_file, in_size, in_stride, in_out_dir):
             #create a single chip feature with attributes and all
             attr_dict = {}
             attr_dict['basename'] = attr_basename
-            attr_dict['filename'] = attr_filename
+            attr_dict['chip_name'] = attr_filename
             attr_dict['a0'] = px_width
             attr_dict['a1'] = row_rot
             attr_dict['a2'] = col_off
@@ -316,7 +315,7 @@ def write_annotations(in_gdf, out_path='none'):
     coord_gdf = coords_2_pix_gdf(in_gdf)
     
     #set our columns/column order
-    out_gdf = coord_gdf[['filename', 'x_min', 'y_min', 'x_max', 'y_max', 
+    out_gdf = coord_gdf[['chip_name', 'x_min', 'y_min', 'x_max', 'y_max', 
                          'px_x_min', 'px_y_min', 'px_x_max', 'px_y_max', 
                          'label_name', 'label', 'label_int']]
     
@@ -374,15 +373,15 @@ def backbone(args, in_f):
     try:
         logging.info(f"writing positive files: {in_f}")
         #generate a list of positive chips in the annotation database.
-        pos_chips = intersect['filename'].unique().tolist()
+        pos_chips = intersect['chip_name'].unique().tolist()
         
-        pos_chips_gdf = cindex[cindex['filename'].isin(pos_chips)]
+        pos_chips_gdf = cindex[cindex['chip_name'].isin(pos_chips)]
         #print(pos_chips_gdf.head())
 
-        for i, row in pos_chips_gdf[['geometry', 'basename','filename']].iterrows():
+        for i, row in pos_chips_gdf[['geometry', 'basename','chip_name']].iterrows():
             polygon = row["geometry"]
             src_raster = row['basename']
-            out_raster_path = os.path.join(out_dir, f"{row['filename']}.jpg")
+            out_raster_path = os.path.join(out_dir, f"{row['chip_name']}.jpg")
             #print(f"{polygon}, {src_raster}, {out_raster_path}")
             #this also write our positive image chip to a jpeg located at out_raster_path
             mask_raster(polygon, src_raster, out_raster_path, size, )
